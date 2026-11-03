@@ -4206,5 +4206,104 @@ function svgRaias(f){
 }
 
 </script>
+<script>
+/* Integração SIGE-novasreceitas -> Faturamento (#novo=, contrato v1). Abre cliente > contrato > serviço já preenchidos.
+   Nada é salvo sem o usuário clicar em Salvar em cada etapa. O trecho depois do # não vai a servidor e é apagado do endereço. */
+(function(){
+  var D=null;
+  try{
+    var m=String(location.hash||'').match(/^#novo=([A-Za-z0-9_-]+)$/);
+    if(m){
+      var j=JSON.parse(decodeURIComponent(escape(atob(m[1].replace(/-/g,'+').replace(/_/g,'/')))));
+      if(j&&j.v===1){D=j;try{sessionStorage.setItem('fatNovo',JSON.stringify(j));}catch(e){}}
+      try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
+    }else{
+      var s=null;try{s=sessionStorage.getItem('fatNovo');}catch(e){}
+      if(s)D=JSON.parse(s);
+    }
+  }catch(e){D=null;}
+  if(!D||!D.cliente)return;
+  var ST={step:'espera'},byEl=function(i){return document.getElementById(i);};
+  function banner(t){
+    var b=byEl('novoBanner');
+    if(!t){if(b)b.remove();return;}
+    if(!b){b=document.createElement('div');b.id='novoBanner';b.style.cssText='position:fixed;left:16px;bottom:16px;z-index:99999;background:#6e1423;color:#fff;padding:10px 14px;border-radius:10px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3);max-width:360px';document.body.appendChild(b);}
+    b.innerHTML='<b>Nova venda (SIGE)</b> — '+t+' <a href="#" id="novoX" style="color:#fff;margin-left:8px;text-decoration:underline">cancelar</a>';
+    byEl('novoX').onclick=function(e){e.preventDefault();ST.step='fim';try{sessionStorage.removeItem('fatNovo');}catch(x){}banner(null);};
+  }
+  function sv(id,val){var e=byEl(id);if(!e||val==null||val==='')return;val=String(val);
+    if(e.tagName==='SELECT'){for(var i=0;i<e.options.length;i++)if(e.options[i].value===val){e.value=val;return;}}else e.value=val;}
+  function iso(t){t=String(t||'').trim();var m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);if(m)return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+    return /^\d{4}-\d{2}-\d{2}$/.test(t)?t:'';}
+  function fimPorMeses(ini,n){n=parseInt(n,10);if(!ini||!n||n<1||n>120)return '';
+    var p=ini.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1+n,+p[2]-1));return d.toISOString().slice(0,10);}
+  function dig(x){return String(x||'').replace(/\D/g,'');}
+  function acharCliente(){
+    var c=D.cliente,cn=dig(c.cnpj),nm=(typeof norm==='function'?norm:function(s){return String(s||'').toLowerCase();});
+    var n1=nm(c.nome),n2=nm(c.razao);
+    return (S.clientes||[]).filter(function(x){
+      if(cn&&dig(x.CNPJ)===cn)return true;
+      if(cn&&String(x.Tomadores||'').replace(/\D/g,'').indexOf(cn)>=0)return true;
+      var t=nm(x.Title),r=nm(x.RazaoSocial);
+      return (n1&&(t===n1||r===n1))||(n2&&(t===n2||r===n2));
+    })[0]||null;
+  }
+  function passoCliente(){
+    ST.step='cliente';banner('passo 1 de 3: cliente. Revise e clique em Salvar.');
+    openCliente('');var c=D.cliente,k=D.contrato||{},it=D.item||{};
+    sv('c_Title',c.nome);sv('c_RazaoSocial',c.razao);sv('c_CNPJ',c.cnpj);sv('c_Area',D.area);sv('c_Unidade',D.unidade);
+    sv('c_Coordenador',k.coord);sv('c_CoordenadorEmail',k.coordEmail);sv('c_AprovadorNome',k.aprov);sv('c_AprovadorEmail',k.aprovEmail);
+    sv('c_CondicaoPagamento',it.condPag);sv('c_DiaLimiteNF',k.diaLimiteNF);
+  }
+  function passoContrato(cid){
+    ST.step='contrato';ST.cid=String(cid);banner('passo 2 de 3: contrato. Revise e clique em Salvar.');
+    openContrato(cid,'');var k=D.contrato||{},ini=iso(k.inicio),fim=iso(k.fim)||fimPorMeses(ini,k.numMeses);
+    sv('k_Title',k.numero);sv('k_Inicio',ini);sv('k_Fim',fim);sv('k_IndiceReajuste',k.indice);sv('k_MesReajuste',k.mesReajuste);sv('k_DiaLimiteNF',k.diaLimiteNF);
+    sv('k_Observacoes','Aberto a partir da venda no SIGE-novasreceitas.');
+  }
+  function passoItem(ctId){
+    ST.step='item';banner('passo 3 de 3: serviço (valor mensal). Revise e clique em Salvar.');
+    openItem(ctId,'');var k=D.contrato||{},it=D.item||{};
+    sv('i_Title',D.servico||'');sv('i_ValorMensal',k.valorMensal);
+    var sel=byEl('i_CodigoId'),cod=String(it.codigo||'').trim();
+    if(cod){var ok=false;if(sel)for(var i=0;i<sel.options.length;i++)if(sel.options[i].value&&sel.options[i].text.indexOf(cod)>=0){sel.value=sel.options[i].value;ok=true;break;}
+      if(!ok)sv('i_CodigoServicoNF',cod);}
+    var pz=String(it.prazoFat||'');if(/imediat/i.test(pz))sv('i_PrazoFaturamento','0');else{var d=dig(pz);if(d)sv('i_PrazoFaturamento',d);}
+    sv('i_NumPedido',k.oc);sv('i_Area',D.area);
+    if(typeof itemPreview==='function')try{itemPreview();}catch(e){}
+    if(byEl('dv_p0')&&typeof showToast==='function')showToast('Este cliente tem mais de um tomador: informe a divisão (%) antes de salvar.',true);
+  }
+  function envolver(nome,fn){var o=window[nome];if(typeof o!=='function')return;window[nome]=async function(){var r=await o.apply(this,arguments);try{await fn.apply(this,arguments);}catch(e){console.error(e);}return r;};}
+  envolver('salvarCliente',function(id){
+    if(ST.step!=='cliente'||id)return;
+    if(SEL.cliente&&byId('clientes',SEL.cliente)&&SEL.cliente!==ST.ant)passoContrato(SEL.cliente);
+  });
+  envolver('salvarContrato',function(cid,ctId){
+    if(ST.step!=='contrato'||ctId)return;
+    if(SEL.contrato&&byId('contratos',SEL.contrato)&&SEL.contrato!==ST.antCt)passoItem(SEL.contrato);
+  });
+  envolver('salvarItem',function(ctId,itemId){
+    if(ST.step!=='item'||itemId)return;
+    if(!byEl('modal').classList.contains('show')){ST.step='fim';try{sessionStorage.removeItem('fatNovo');}catch(e){}banner(null);if(typeof showToast==='function')showToast('Venda aberta no Faturamento ✓');}
+  });
+  function iniciar(){
+    try{sessionStorage.removeItem('fatNovo');}catch(e){}
+    if(typeof acessoTotal==='function'&&!acessoTotal()){banner(null);if(typeof showToast==='function')showToast('Seu perfil não cadastra contratos. Peça ao Financeiro para abrir esta venda.',true);return;}
+    showTab('clientes');
+    ST.ant=SEL.cliente;ST.antCt=SEL.contrato;
+    var ex=acharCliente();
+    if(ex){if(typeof showToast==='function')showToast('Cliente já cadastrado: '+ex.Title+'. Abrindo novo contrato.');ST.antCt=SEL.contrato;passoContrato(ex.id);}
+    else passoCliente();
+  }
+  var n=0,tm=setInterval(function(){
+    n++;
+    var ma=byEl('mainArea'),pronto=ma&&!ma.classList.contains('hidden')&&window.S&&S.clientes&&CURRENT_USER&&CURRENT_USER.email;
+    if(ST.step==='fim'){clearInterval(tm);return;}
+    if(pronto){clearInterval(tm);iniciar();return;}
+    if(n===1)banner('faça o login para abrir a venda de '+(D.cliente.nome||'cliente')+'.');
+    if(n>1500){clearInterval(tm);banner(null);}
+  },400);
+})();
+</script>
 </body>
 </html>
